@@ -367,6 +367,14 @@
   .export-btn .fmt{color:var(--text-muted);font-weight:400;font-size:11px;}
   .export-note{font-size:11px;color:var(--text-faint);margin-top:6px;line-height:1.5;}
 
+  /* ---------- global usage panel ---------- */
+  .global-panel[hidden]{display:none;}
+  .global-panel{flex:0 0 auto;border-top:1px solid var(--border);padding:12px 14px 14px;}
+  .global-stats{display:flex;gap:14px;}
+  .global-stat{display:flex;flex-direction:column;gap:2px;}
+  .global-stat b{font-size:17px;font-weight:700;color:var(--text);line-height:1.1;}
+  .global-stat span{font-size:10.5px;color:var(--text-muted);}
+
   /* ---------- toast ---------- */
   .toast-stack{
     position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
@@ -394,8 +402,6 @@
     .panel-right{width:250px;}
   }
 </style>
-</head>
-<body>
 
 <header class="app-header">
   <div class="brand">
@@ -498,6 +504,15 @@
       <button class="export-btn" id="expVoc" disabled><span>Pascal VOC</span><span class="fmt">.zip</span></button>
       <p class="export-note" id="exportNote">Exports every image's annotations across all classes. Preparing export…</p>
     </div>
+
+    <div class="global-panel" id="globalPanel" hidden>
+      <span class="panel-title" style="display:block;margin-bottom:8px;">Global usage</span>
+      <div class="global-stats">
+        <div class="global-stat"><b id="gImages">0</b><span>images annotated</span></div>
+        <div class="global-stat"><b id="gBoxes">0</b><span>boxes drawn</span></div>
+        <div class="global-stat"><b id="gVisits">0</b><span>visits</span></div>
+      </div>
+    </div>
   </section>
 
 </main>
@@ -505,9 +520,28 @@
 <div class="toast-stack" id="toastStack"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.14.1/firebase-app-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.14.1/firebase-firestore-compat.js"></script>
 <script>
 (function(){
 "use strict";
+
+/* ================= global usage stats (optional) =================
+   Fill in a free Firebase project's config below to turn on the
+   "Global usage" panel — a live count of visits, images annotated,
+   and boxes drawn, shared across everyone who opens this page.
+   Leave apiKey as the placeholder to keep the panel off; the rest of
+   the app works exactly the same either way. See README for setup
+   steps and the Firestore security rules to paste in. */
+const firebaseConfig = {
+  apiKey: "YOUR_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+let fsDb = null;
 
 /* ================= IndexedDB helper ================= */
 const DB_NAME = "fieldbox-v1";
@@ -1000,6 +1034,7 @@ async function confirmLabelPrompt(){
   }
   state.activeClassId = cls.id;
 
+  const wasFirstBoxOnImage = state.annotations.length === 0;
   const rec = {id: uid(), imageId: img.id, classId: cls.id, x:box.x, y:box.y, w:box.w, h:box.h, createdAt: Date.now()};
   await putRecord("annotations", rec);
   state.annotations.push(rec);
@@ -1009,6 +1044,8 @@ async function confirmLabelPrompt(){
 
   renderClassList(); renderAnnoList(); drawAnnotations(); renderImageList(); renderStats();
   refreshExportAvailability();
+  incrementGlobalStat("boxesDrawn");
+  if (wasFirstBoxOnImage) maybeCountImageAnnotated(img);
 }
 
 function cancelLabelPrompt(){
@@ -1798,6 +1835,42 @@ async function initDownloads(){
   refreshExportAvailability();
 }
 
+/* ================= global usage stats (optional) ================= */
+function incrementGlobalStat(field){
+  if (!fsDb) return;
+  fsDb.collection("stats").doc("global")
+    .update({[field]: firebase.firestore.FieldValue.increment(1)})
+    .catch(() => {}); /* offline, blocked, or not set up yet — fail quietly */
+}
+
+async function maybeCountImageAnnotated(img){
+  if (!fsDb || !img || img.globalCounted) return;
+  img.globalCounted = true;
+  try{ await putRecord("images", img); } catch(e){}
+  incrementGlobalStat("imagesAnnotated");
+}
+
+function initGlobalStats(){
+  try{
+    if (!firebaseConfig.apiKey || firebaseConfig.apiKey.indexOf("YOUR_") === 0) return; /* not configured */
+    if (typeof firebase === "undefined") return;
+    firebase.initializeApp(firebaseConfig);
+    fsDb = firebase.firestore();
+    const ref = fsDb.collection("stats").doc("global");
+    ref.onSnapshot((snap) => {
+      if (!snap.exists) return;
+      const d = snap.data();
+      $("gImages").textContent = (d.imagesAnnotated || 0).toLocaleString();
+      $("gBoxes").textContent = (d.boxesDrawn || 0).toLocaleString();
+      $("gVisits").textContent = (d.visits || 0).toLocaleString();
+      $("globalPanel").hidden = false;
+    }, () => {}); /* read blocked or offline — panel just stays hidden */
+    incrementGlobalStat("visits");
+  } catch(e){
+    fsDb = null;
+  }
+}
+
 /* ================= bootstrap ================= */
 async function init(){
   wireStaticEvents();
@@ -1822,15 +1895,17 @@ async function init(){
   }
 
   initDownloads();
+  initGlobalStats();
 }
 
 init();
 })();
 </script>
+
+
+
+
+
+
 </body>
 </html>
-
-
-
-
-
